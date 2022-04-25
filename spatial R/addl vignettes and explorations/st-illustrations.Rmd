@@ -1,0 +1,37 @@
+---
+title: "Points on Suface vs Centroids"
+author: "kira"
+date: "1/21/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#devtools::install_github("https://github.com/spatial-ineq/nyc.mvmt.crime.git")
+```
+
+
+## Points vs centroids
+
+
+```{r pts, width = 40, height = 30}}
+
+geos <- nyc.mvmt.crime::geo.ny %>% st_transform(32118)
+# make points
+tmp <- st_sf(
+  type = "point on surface",
+  geometry = st_point_on_surface(geos$geometry)
+  )
+tmpc <-
+  st_sf(
+    type = "centroid",
+    st_centroid(geos$geometry)
+    )
+
+library(mapview)
+mapview(tmp, zcol = "type") +
+  mapview(tmpc, zcol = "type", col.region = "red") +
+  mapview(st_boundary(geos), color = "sienna1")
+
+```
+

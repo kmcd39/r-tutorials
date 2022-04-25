@@ -1,0 +1,165 @@
+---
+title: "gstat-checks"
+author: "kira"
+date: "1/22/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## inverse-distance interpolation
+
+```{r idw}
+
+library(nyc.mvmt.crime)
+
+rm(list=ls())
+library(dplyr)
+library(sf)
+library(lubridate)
+library(purrr)
+library(stars)
+
+# ------------------------------------------------------------------------------
+
+# different ways of melting cbg-bounded data to non-arbitray area.. This tries
+# converting cbgs to a raster grid, and then distance-decaying a variable of interest
+# from the centroid.
+
+# ------------------------------------------------------------------------------
+
+# start w/ shootings data and cbg geometries -----------------------------------
+
+# use equidistance projection, not long-lat
+geo.ny <- geo.ny %>% st_transform(32118)
+
+# get monthly shootings
+shootings <- shootings %>% 
+  tibble() %>% 
+  group_by(cbgid, year, month) %>% 
+  summarise(across(contains("incidents"),
+                   ~sum(., na.rm = T))) %>% 
+  arrange(cbgid, year, month) %>% 
+  right_join(geo.ny,
+             by = c("cbgid" = "geoid")) %>% 
+  rename("geoid" = "cbgid") %>% 
+  st_sf()
+
+  
+#shootings <- geo.ny %>% left_join(shootings,
+#                                  by = c("geoid" = "cbgid"))
+shootings
+
+# make points
+shootings$geometry <- st_centroid(shootings$geometry)
+
+# organize time ---------------
+sm <- shootings %>% filter(!is.na(year))
+sm$time = if_else(sm$year == 2019,
+                  sm$month,
+                  sm$month + 12
+                  )
+sm <- sm %>% select(geoid, time, total_incidents)
+
+
+# define stars grid  -------------
+library(stars)
+rez <- 100
+stny <- st_rasterize(geo.ny,
+                     dx = rez, dy = rez)
+                     #resolution = rez)
+
+# get proximities to shootings by month
+get_proxims <- function(shootings, grid, maxdist = 400, idp = 2) {
+  
+  idws <- 
+    # interpolate from shooting points to raster over nyc
+    gstat::idw(total_incidents ~ 1, shootings, grid,
+               maxdist= maxdist, idp = idp)
+
+
+  # add proximities to ny raster
+  grid$prx <- idws$var1.pred
+  
+  # make 0 where cell is in nyc area but no shooting (NAs outside of nyc area)
+  grid$prx <- 
+    if_else(!is.na(grid$ID) &
+              is.na(grid$prx),
+            0,
+            grid$prx)
+  
+  return(grid)
+}
+
+june2020 <- sm %>% 
+  filter(time == 20)
+  
+```
+
+How does changing `idw` parameters affect outcome?
+
+```{r idw2, fig.width="100%"}
+
+mdists <- seq(100,1600, by = 100)
+denoms <- seq(.25, 4, by = .25)
+
+id.variations <- 
+  map2(mdists, denoms,
+     ~get_proxims(june2020, stny,
+                  maxdist = .x, idp = .y)
+     )
+
+library(ggplot2)
+
+map(8:length(id.variations),
+     ~{
+       ggplot() +
+         geom_stars(data = id.variations[[.]]["prx"],
+                    aes(x = x, y=y,
+                        fill = prx)) +
+         scale_fill_binned(type = "viridis"
+                           ,n.breaks = 12
+                           ) +
+         ggtitle(paste0(
+           "max dist: ", mdists[.]," & idp:", denoms[.], "")    
+         )
+       }
+     )
+
+```
+
+Holding maxdist constant...?
+
+```{r idw2, fig.width="100%", echo = F}
+
+denoms <- seq(.0001, 3, by = .3)
+mdists <- rep(400, length(denoms))#seq(100,1600, by = 100)
+
+
+id.variations <- 
+  map2(mdists, denoms,
+     ~get_proxims(june2020, stny,
+                  maxdist = .x, idp = .y)
+     )
+
+library(ggplot2)
+
+map(1:length(id.variations),
+     ~{
+       ggplot() +
+         geom_stars(data = id.variations[[.]]["prx"],
+                    aes(x = x, y=y,
+                        fill = prx)) +
+         scale_fill_binned(type = "viridis"
+                           ,n.breaks = 12
+                           ) +
+         ggtitle(paste0(
+           "max dist: ", mdists[.]," & idp:", denoms[.], "")    
+         )
+       }
+     )
+
+```

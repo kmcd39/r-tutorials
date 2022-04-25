@@ -1,0 +1,204 @@
+---
+title: "Spatial R"
+author: "kira"
+date: "1/12/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.show = "hold",
+                      out.width = "45%")
+```
+
+## Library overview
+
+Quick glossary of useful spatial libraries--examples will follow below.
+
+`sf`is the key R library for spatial R. You'll likely always want to load whenever doing mapping + spatial analysis
+
+For pulling in census geometries directly from R, `tigris` is extremely useful. `tidycensus` is less straightforward to use, but can pull census estimates from decennial/ACS as well as geometries (although it has some limitations that can be annoying)
+
+For cleaning + manipulating spatial data, `rmapshaper` and `lwgeom` are also both worth noting.
+
+You might see references to `sp` and a host of other libraries on stackoverflow and elsewhere--`sp` provided some similar functionalities but is rapidly getting displaced by `sf`. I recommend trying to avoid older libraries that are falling out of favor. `sf` is really easy and good and it is gaining popularity for a reason.
+
+
+#### for visualization
+
+For exploratory visualization, I generally use base `plot` (extended by `sf`), or `mapview`.  
+
+For more complex or polished plots, I generally use either `ggplot2` or `leaflet`.
+
+`leaflet` and `mapview` make interactive/zoom-able plots.
+
+## `sf` Overview
+
+`sf` is the library that all the others above will depend. Full documentation for the library is [here](https://r-spatial.github.io/sf/).
+
+Some quick notes:
+
+* All functions are prefixed with `st_`
+* `sf` objects are basically data.frames that include a geometry column. The geometry column will represent the spatial features associated with each row.
+* The geometry column will be "sticky"--to drop it, you'll have to turn the `sf` into a tibble or other non-spatial data.frame. This is often useful because grouping an `sf` object will cause geometries to union. This can very useful, but it can also be an expensive operation that slows down non-spatial analysis.
+
+## Spatial data sample workflow
+
+Here's a little sample workflow that models most of the above libraries.
+
+First, let's load `sf` and get some geometries for a study area from `tigris`. I'll also use a personal library I made, `xwalks`, to link counties to commuting zones.
+
+```{r pull.data, results = "hide"}
+suppressMessages(library(dplyr))
+suppressMessages(library(sf))
+
+
+# let's get some Places in NJ with population attached, using tidycensus
+acs.vars <- tidycensus::load_variables(year = 2018, dataset = "acs5")
+acs.vars %>% head(3)
+
+nj.pl <- 
+  suppressMessages(tidycensus::get_acs(geography = "place",
+                               state = "NJ",
+                               variables = "B01001_001", # just population
+                              geometry = TRUE,
+                               year = 2018))
+
+```
+
+```{r parse}
+(nj.pl <- nj.pl %>% 
+  select(GEOID, place = NAME, population = estimate))
+
+# class of object
+class(nj.pl)
+
+# quick plot
+plot(nj.pl["population"])
+
+```
+
+## Coordinate reference systems
+
+You might run into some issues caused by the curvature of the earth. As you probably know, maps are projected different ways to represent geography on a flat surface. The projection method is called a coordinate reference system (CRS).
+
+The curvature of the earth is not dealt with in all spatial R libraries. The `lwgeom` package can extend `sf` to allow
+"geodetic" functions, which do account for the curved surface when calculating things like distance or area.
+See: (https://r-spatial.github.io/lwgeom/reference/geod.html)
+
+You'll also generally have to transform  your spatial datasets to the same CRS to work with them together. Some functions will give a message/warning/error based on whether it expects long/lat or planar geometries.
+
+A CRS can store a lot of information, but common ones can just be represented by a 4+ digit number, called an [EPSG code](https://en.wikipedia.org/wiki/EPSG_Geodetic_Parameter_Dataset). You can use the *espg 4326* for a common long-lat crs.
+
+
+```{r crs, error = T}
+library(lwgeom)
+
+nj.pl <- st_transform(nj.pl, 4326)
+st_crs(nj.pl)
+
+# alternate projection -- this puts geometries in meters instead of long/lat
+# this projection won't be area-preserving
+nj.plm <- st_transform(nj.pl, "+proj=eqdc +lat_0=0 +lon_0=0 +lat_1=33 +lat_2=45 +x_0=0 +y_0=0")
+st_crs(nj.plm)
+
+# compare calculated areas
+st_area(nj.pl) %>% head()
+st_area(nj.plm) %>% head()
+(st_area(nj.pl) - st_area(nj.plm)) %>% summary()
+
+# explict call to geod_area, which expects a long/lat projection
+st_geod_area(nj.plm)
+
+```
+
+
+## Spatial joins & filters
+
+These are useful for working across different geography levels.
+Let's join places with commuting zones, say.
+I'll use a personal library, `xwalks`, to link counties to CZs.
+
+```{r getcos, message=FALSE, results = "hide"}
+
+# get counties from tigris
+counties <- 
+  tigris::counties(state = "NJ",
+                             cb = TRUE,
+                             year = 2018)
+
+```
+
+```{r joins, message=FALSE}
+
+# devtools::install_github("https://github.com/kmcd39/xwalks.git")
+# use xwalks to add czs
+(co2cz <- xwalks::co2cz)
+
+counties <- left_join(counties, co2cz,
+                      by = c("GEOID" = "countyfp"))
+
+# clarify column names, so we don't end up with diffferent GEOIDs for Places and
+# Counties
+counties <- counties %>% 
+  select(countyfp = GEOID, county_name = NAME,
+         cz, cz_name)
+
+nj.pl <- nj.pl %>% 
+  rename(place.id = GEOID)
+
+
+# First try spatial join (this will cause an issue)
+counties <- counties %>% st_transform(4326)
+nj <- counties %>% st_intersection(nj.pl)
+
+nj.pl$place.id %>% duplicated() %>% sum()
+nj$place.id %>% duplicated() %>% sum()
+# we duplicated places!
+
+# this is because very slight overlaps will be included in the interesection. Joins
+# can be thrown off by shapes having slightly different resolutions or other issues
+
+# The xwalks pkg has two fcns for dealing with this. (turns smaller geos into points
+# to do so)
+nj <- xwalks::generate.coterminous.xwalk(nj.pl, counties)
+nj$geometry <- nj.pl$geometry # add back in polygon geometries
+
+nj.pl$place.id %>% duplicated() %>% sum()
+nj$place.id %>% duplicated() %>% sum()
+
+# places by cz count
+nj %>% count(cz_name)
+
+# plots
+plot(counties["cz_name"], main = "counties by cz")
+plot(nj["cz_name"], main = "places by cz")
+
+```
+
+
+### Alternatives mapping methods
+
+* ggplot & geom_sf
+
+```{r map, message=FALSE}
+
+nj.czs <- counties %>% group_by(cz, cz_name) %>% summarise(., do_union = T)
+
+library(ggplot2)
+ggplot() +
+  geom_sf(data = nj, aes(fill = population)) +
+  geom_sf(data = st_boundary(nj.czs), color = "red") +
+  scale_fill_binned(type = "viridis", n.breaks = 6)
+
+```
+
+* Mapview
+
+```{r map2, message=FALSE}
+
+library(mapview)
+mapview(nj.pl, zcol="population")
+
+```
