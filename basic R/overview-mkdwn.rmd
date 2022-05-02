@@ -1,0 +1,149 @@
+---
+title: "markdown"
+author: "kira"
+output:  
+  html_document:
+     toc: true
+     toc_float: true
+     theme: cerulean
+     highlight: tango
+---
+
+<style type="text/css">
+  body{
+  font-size: 14pt;
+}
+</style>
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T
+                      ,message = F
+                      ,warning = F
+                      ,fig.width=9, fig.height=8)
+library(tidyverse)
+options(tigris_use_cache = TRUE)
+
+```
+
+<hr>
+
+# Installing R
+
+R (the programming language) —
+https://cran.r-project.org/
+
+Rstudio (the development environment) —
+https://www.rstudio.com/products/rstudio/download/
+
+# Overview
+
+R is open source, which means it is free, and many people supply packages, contribute capabilities to it.
+
+Because it is open source and has a pretty good user ecosystem, people have developed a lot of capabilities for R. It can be used for data wrangling, linking to various other programs/APIs, building interactive data-vis apps (with shiny), spatial analysis and mapping, and whatever other stats/data science tasks.
+
+This will show how to do some very basic analysis, wrangling, and visualization with different approaches in R.
+
+# R Syntaxes
+
+A lot of the capabilities are redundant.  For example, in R there are a variety of different syntaxes — different ways of writing the same code. Different syntaxes may have different niche advantages/disadvantages, but you can use based on your preferences. 
+
+For basic manipulation of data, there are three main syntaxes: data.table, base R, and tidyverse. Base R is always part of R, but to use another syntax or package you have to load it. 
+
+Another person’s syntax cheatsheet (which omits data.table for formula syntax) is [here](https://cran.r-project.org/web/packages/data.table/vignettes/datatable-intro.html)
+
+### Base R
+
+```{r base}
+
+# use a common demonstation dataset, bundled in R.
+# '<-' is the assignment operator; it defines an object or variable.
+cars <- mtcars
+
+# look at first 5 rows of dataset
+head(cars)
+
+# (what does that function do?)
+?head
+# we can also look at documentation for the dataset we loaded
+?mtcars
+
+# use base R to check the average mpg
+mean(cars$mpg)
+
+# plot wt to mpg
+plot(cars$wt, cars$mpg)
+
+# (damn big cars are wasteful)
+
+```
+
+
+### Tidyverse
+
+
+```{r tidy}
+
+# let's load tidyverse
+library(tidyverse)
+
+# we can make cars a "tibble" or tidy table, and it displays slightly differently:
+
+# base data.frame
+cars
+
+# tidy tibble
+cars <- tibble(cars)
+cars
+
+# a key component of tidyverse syntax is the pipe: %>%
+# pipe passes a componenent into a function. So instead of
+mean(cars$mpg)
+# we can also write
+cars$mpg %>% mean()
+# or even
+cars %>% .$mpg %>% mean()
+
+
+# Now it's much easier to see the average MPG for different cylinders
+cars %>% 
+  group_by(cyl) %>% 
+  summarise(mean.mpg = mean(mpg),
+            count = n())
+
+# we collapsed the cars dataset to a summary table with mean miles per gallon by
+# number of cylinders and the row counts for each number of
+# cyclinders.
+
+# use ggplot -- tidyverse visualization technique to make a more complex plots
+
+p <- ggplot(cars
+       ,aes(x = wt
+            ,y = mpg)) +
+  geom_smooth( color = 'turquoise'
+               ,size = 2) +
+  geom_point(aes(color = factor(cyl))) 
+
+p
+
+# graph attributes that should change based on a variable in the dataset will be wrapped in aes(),
+#' other qualities like color or size or opacity (alpha), which may be static, should
+#' be outside of aes().
+
+# let's improve the labeling somewhat, by adding to the plot object "p" we just
+# created. This is something you can do with ggplot.
+p +
+  scale_x_continuous(name = 'weight') +
+  scale_color_discrete(name = 'cylinders') +
+  labs(title = 'Miles per gallon as a function of car weight'
+     ,subtitle = 'Points represent a car make, colored by engine cylinders. Smoothed line shown.')
+
+# a messy interactive version (if you want to use 1 function from a package without
+# loading the entire package, use "::")
+plotly::ggplotly(p)
+
+```
+
+### Data.table
+
+I use mostly tidyverse and some base R when I write code. I won’t write anything about data.table because I don’t use it, but here’s a resource [here](https://cran.r-project.org/web/packages/data.table/vignettes/datatable-intro.html)
